@@ -78,6 +78,136 @@ import {
 // Helpers
 // ============================================================================
 
+export type PromptInputSubmitMode = "enter" | "mod-enter";
+
+export type PromptInputLanguageSource = readonly string[] | string | null | undefined;
+
+export type PromptInputSubmitModePreferenceReason =
+  | "submitted-with-modifier"
+  | "newline-before-modifier-submit"
+  | "newline-removed-before-modifier-submit";
+
+export interface PromptInputSubmitModePreferenceEvent {
+  currentSubmitMode: PromptInputSubmitMode;
+  reason: PromptInputSubmitModePreferenceReason;
+  suggestedSubmitMode: PromptInputSubmitMode;
+}
+
+export interface UsePromptInputSubmitModeOptions {
+  fallbackWhenUnknown?: PromptInputSubmitMode;
+  languages?: PromptInputLanguageSource;
+  storedSubmitMode?: PromptInputSubmitMode | null;
+}
+
+type PromptInputShortcutPreferenceState =
+  | { at: null; kind: "idle" }
+  | { at: number; kind: "trailing-newline" }
+  | { at: number; kind: "trimmed-trailing-newline" };
+
+const DEFAULT_PROMPT_INPUT_SUBMIT_MODE: PromptInputSubmitMode = "enter";
+const PROMPT_INPUT_SHORTCUT_PREFERENCE_WINDOW_MS = 3000;
+const PROMPT_INPUT_MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
+
+const parsePromptInputLanguageEntry = (language: string, index: number) => {
+  const [tag, ...parameters] = language
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (!tag) {
+    return null;
+  }
+
+  const qualityParameter = parameters.find((parameter) =>
+    parameter.toLowerCase().startsWith("q=")
+  );
+  const quality = qualityParameter
+    ? Number.parseFloat(qualityParameter.slice(2))
+    : 1;
+
+  return {
+    index,
+    quality: Number.isFinite(quality) ? quality : 1,
+    tag: tag.toLowerCase(),
+  };
+};
+
+const getNavigatorPromptInputLanguages = (): readonly string[] | undefined => {
+  if (typeof navigator === "undefined") {
+    return undefined;
+  }
+
+  if (Array.isArray(navigator.languages) && navigator.languages.length > 0) {
+    return navigator.languages;
+  }
+
+  if (navigator.language) {
+    return [navigator.language];
+  }
+
+  return undefined;
+};
+
+const normalizePromptInputLanguageEntries = (
+  languages: PromptInputLanguageSource
+) => {
+  const rawEntries =
+    typeof languages === "string"
+      ? languages.split(",")
+      : languages
+        ? [...languages]
+        : [];
+
+  return rawEntries
+    .map((language, index) => parsePromptInputLanguageEntry(language, index))
+    .filter((entry) => entry !== null)
+    .sort((left, right) => right.quality - left.quality || left.index - right.index);
+};
+
+const hasCollapsedSelectionAtEnd = (element: HTMLTextAreaElement) =>
+  element.selectionStart === element.selectionEnd &&
+  element.selectionEnd === element.value.length;
+
+const isJapaneseLanguageTag = (languageTag: string) =>
+  languageTag === "ja" || languageTag.startsWith("ja-");
+
+const isModifierSubmitKey = (event: { ctrlKey: boolean; metaKey: boolean }) =>
+  event.ctrlKey || event.metaKey;
+
+const isShortcutPreferenceStateFresh = (
+  state: PromptInputShortcutPreferenceState,
+  now: number
+) => state.kind !== "idle" && now - state.at <= PROMPT_INPUT_SHORTCUT_PREFERENCE_WINDOW_MS;
+
+export const inferPromptInputSubmitMode = (
+  languages: PromptInputLanguageSource,
+  fallbackWhenUnknown: PromptInputSubmitMode = DEFAULT_PROMPT_INPUT_SUBMIT_MODE
+): PromptInputSubmitMode => {
+  const [primaryLanguage] = normalizePromptInputLanguageEntries(languages);
+
+  if (!primaryLanguage) {
+    return fallbackWhenUnknown;
+  }
+
+  return isJapaneseLanguageTag(primaryLanguage.tag) ? "mod-enter" : "enter";
+};
+
+export const usePromptInputSubmitMode = ({
+  fallbackWhenUnknown = DEFAULT_PROMPT_INPUT_SUBMIT_MODE,
+  languages,
+  storedSubmitMode,
+}: UsePromptInputSubmitModeOptions = {}) =>
+  useMemo(() => {
+    if (storedSubmitMode) {
+      return storedSubmitMode;
+    }
+
+    return inferPromptInputSubmitMode(
+      languages ?? getNavigatorPromptInputLanguages(),
+      fallbackWhenUnknown
+    );
+  }, [fallbackWhenUnknown, languages, storedSubmitMode]);
+
 const convertBlobUrlToDataUrl = async (url: string): Promise<string | null> => {
   try {
     const response = await fetch(url);
@@ -949,20 +1079,41 @@ export const PromptInputBody = ({
   <div className={cn("contents", className)} {...props} />
 );
 
-export type PromptInputTextareaProps = ComponentProps<
-  typeof InputGroupTextarea
->;
+export type PromptInputTextareaProps = ComponentProps<typeof InputGroupTextarea> & {
+  onSubmitModePreferenceDetected?: (
+    event: PromptInputSubmitModePreferenceEvent
+  ) => void;
+  submitMode?: PromptInputSubmitMode;
+};
 
 export const PromptInputTextarea = ({
   onChange,
   onKeyDown,
   className,
+  onSubmitModePreferenceDetected,
   placeholder = "What would you like to know?",
+  submitMode = DEFAULT_PROMPT_INPUT_SUBMIT_MODE,
   ...props
 }: PromptInputTextareaProps) => {
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
+  const shortcutPreferenceState =
+    useRef<PromptInputShortcutPreferenceState>({
+      at: null,
+      kind: "idle",
+    });
+
+  const clearShortcutPreferenceState = useCallback(() => {
+    shortcutPreferenceState.current = {
+      at: null,
+      kind: "idle",
+    };
+  }, []);
+
+  useEffect(() => {
+    clearShortcutPreferenceState();
+  }, [clearShortcutPreferenceState, submitMode]);
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
     (e) => {
@@ -974,17 +1125,81 @@ export const PromptInputTextarea = ({
         return;
       }
 
+      const { currentTarget } = e;
+      const now = Date.now();
+      const usesModifierToSubmit = isModifierSubmitKey(e);
+
+      if (
+        submitMode === "mod-enter" &&
+        e.key !== "Backspace" &&
+        e.key !== "Enter" &&
+        !PROMPT_INPUT_MODIFIER_KEYS.has(e.key)
+      ) {
+        clearShortcutPreferenceState();
+      }
+
       if (e.key === "Enter") {
         if (isComposing || e.nativeEvent.isComposing) {
           return;
         }
-        if (e.shiftKey) {
-          return;
+
+        let detectedPreference: PromptInputSubmitModePreferenceEvent | null =
+          null;
+
+        if (submitMode === "mod-enter") {
+          if (!usesModifierToSubmit) {
+            if (hasCollapsedSelectionAtEnd(currentTarget)) {
+              shortcutPreferenceState.current = {
+                at: now,
+                kind: "trailing-newline",
+              };
+            } else {
+              clearShortcutPreferenceState();
+            }
+            return;
+          }
+
+          if (
+            shortcutPreferenceState.current.kind === "trailing-newline" &&
+            isShortcutPreferenceStateFresh(shortcutPreferenceState.current, now) &&
+            hasCollapsedSelectionAtEnd(currentTarget) &&
+            currentTarget.value.endsWith("\n")
+          ) {
+            detectedPreference = {
+              currentSubmitMode: submitMode,
+              reason: "newline-before-modifier-submit",
+              suggestedSubmitMode: "enter",
+            };
+          } else if (
+            shortcutPreferenceState.current.kind === "trimmed-trailing-newline" &&
+            isShortcutPreferenceStateFresh(shortcutPreferenceState.current, now) &&
+            hasCollapsedSelectionAtEnd(currentTarget)
+          ) {
+            detectedPreference = {
+              currentSubmitMode: submitMode,
+              reason: "newline-removed-before-modifier-submit",
+              suggestedSubmitMode: "enter",
+            };
+          }
+        } else {
+          if (e.shiftKey) {
+            return;
+          }
+
+          if (usesModifierToSubmit) {
+            detectedPreference = {
+              currentSubmitMode: submitMode,
+              reason: "submitted-with-modifier",
+              suggestedSubmitMode: "mod-enter",
+            };
+          }
         }
+
+        clearShortcutPreferenceState();
         e.preventDefault();
 
         // Check if the submit button is disabled before submitting
-        const { form } = e.currentTarget;
+        const { form } = currentTarget;
         const submitButton = form?.querySelector(
           'button[type="submit"]'
         ) as HTMLButtonElement | null;
@@ -992,13 +1207,33 @@ export const PromptInputTextarea = ({
           return;
         }
 
+        if (detectedPreference) {
+          onSubmitModePreferenceDetected?.(detectedPreference);
+        }
+
         form?.requestSubmit();
       }
 
       // Remove last attachment when Backspace is pressed and textarea is empty
+      if (e.key === "Backspace" && submitMode === "mod-enter") {
+        if (
+          shortcutPreferenceState.current.kind === "trailing-newline" &&
+          isShortcutPreferenceStateFresh(shortcutPreferenceState.current, now) &&
+          hasCollapsedSelectionAtEnd(currentTarget) &&
+          currentTarget.value.endsWith("\n")
+        ) {
+          shortcutPreferenceState.current = {
+            at: now,
+            kind: "trimmed-trailing-newline",
+          };
+        } else if (shortcutPreferenceState.current.kind !== "idle") {
+          clearShortcutPreferenceState();
+        }
+      }
+
       if (
         e.key === "Backspace" &&
-        e.currentTarget.value === "" &&
+        currentTarget.value === "" &&
         attachments.files.length > 0
       ) {
         e.preventDefault();
@@ -1008,7 +1243,14 @@ export const PromptInputTextarea = ({
         }
       }
     },
-    [onKeyDown, isComposing, attachments]
+    [
+      onKeyDown,
+      isComposing,
+      submitMode,
+      attachments,
+      clearShortcutPreferenceState,
+      onSubmitModePreferenceDetected,
+    ]
   );
 
   const handlePaste: ClipboardEventHandler<HTMLTextAreaElement> = useCallback(

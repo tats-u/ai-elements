@@ -29,6 +29,7 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
   PromptInputTools,
+  inferPromptInputSubmitMode,
   usePromptInputAttachments,
   usePromptInputReferencedSources,
 } from "../src/prompt-input";
@@ -639,6 +640,24 @@ describe("promptInputBody", () => {
 });
 
 describe("promptInputTextarea", () => {
+  describe("inferPromptInputSubmitMode", () => {
+    it("returns mod-enter for Japanese locales", () => {
+      expect(inferPromptInputSubmitMode("ja-JP")).toBe("mod-enter");
+    });
+
+    it("returns enter when the primary locale is not Japanese", () => {
+      expect(inferPromptInputSubmitMode("en-US,en;q=0.9,ja;q=0.8")).toBe(
+        "enter"
+      );
+    });
+
+    it("respects accept-language quality values", () => {
+      expect(inferPromptInputSubmitMode("en-US;q=0.8,ja;q=1.0")).toBe(
+        "mod-enter"
+      );
+    });
+  });
+
   it("renders textarea", () => {
     setupPromptInputTests();
     const onSubmit = vi.fn();
@@ -704,6 +723,56 @@ describe("promptInputTextarea", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("does not submit on Enter when submitMode is mod-enter", async () => {
+    setupPromptInputTests();
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <PromptInput onSubmit={onSubmit}>
+        <PromptInputBody>
+          <PromptInputTextarea submitMode="mod-enter" />
+          <PromptInputSubmit />
+        </PromptInputBody>
+      </PromptInput>
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      "What would you like to know?"
+    );
+    await user.type(textarea, "Line 1");
+    await user.keyboard("{Enter}");
+
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue("Line 1\n");
+  });
+
+  it("submits on Ctrl+Enter when submitMode is mod-enter", async () => {
+    setupPromptInputTests();
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <PromptInput onSubmit={onSubmit}>
+        <PromptInputBody>
+          <PromptInputTextarea submitMode="mod-enter" />
+          <PromptInputSubmit />
+        </PromptInputBody>
+      </PromptInput>
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      "What would you like to know?"
+    );
+    await user.type(textarea, "Test");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Test" }),
+      expect.anything()
+    );
+  });
+
   it("does not submit on Enter during IME composition - #21", () => {
     setupPromptInputTests();
     const onSubmit = vi.fn();
@@ -741,6 +810,102 @@ describe("promptInputTextarea", () => {
 
     // Should not submit during IME composition
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("reports a mod-enter preference when Ctrl+Enter submits in enter mode", async () => {
+    setupPromptInputTests();
+    const onSubmit = vi.fn();
+    const onSubmitModePreferenceDetected = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <PromptInput onSubmit={onSubmit}>
+        <PromptInputBody>
+          <PromptInputTextarea
+            onSubmitModePreferenceDetected={onSubmitModePreferenceDetected}
+            submitMode="enter"
+          />
+          <PromptInputSubmit />
+        </PromptInputBody>
+      </PromptInput>
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      "What would you like to know?"
+    );
+    await user.type(textarea, "Test");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    expect(onSubmitModePreferenceDetected).toHaveBeenCalledWith({
+      currentSubmitMode: "enter",
+      reason: "submitted-with-modifier",
+      suggestedSubmitMode: "mod-enter",
+    });
+  });
+
+  it("reports an enter preference after newline then Ctrl+Enter in mod-enter mode", async () => {
+    setupPromptInputTests();
+    const onSubmit = vi.fn();
+    const onSubmitModePreferenceDetected = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <PromptInput onSubmit={onSubmit}>
+        <PromptInputBody>
+          <PromptInputTextarea
+            onSubmitModePreferenceDetected={onSubmitModePreferenceDetected}
+            submitMode="mod-enter"
+          />
+          <PromptInputSubmit />
+        </PromptInputBody>
+      </PromptInput>
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      "What would you like to know?"
+    );
+    await user.type(textarea, "Test");
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    expect(onSubmitModePreferenceDetected).toHaveBeenCalledWith({
+      currentSubmitMode: "mod-enter",
+      reason: "newline-before-modifier-submit",
+      suggestedSubmitMode: "enter",
+    });
+  });
+
+  it("reports an enter preference after removing a trailing newline before Ctrl+Enter", async () => {
+    setupPromptInputTests();
+    const onSubmit = vi.fn();
+    const onSubmitModePreferenceDetected = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <PromptInput onSubmit={onSubmit}>
+        <PromptInputBody>
+          <PromptInputTextarea
+            onSubmitModePreferenceDetected={onSubmitModePreferenceDetected}
+            submitMode="mod-enter"
+          />
+          <PromptInputSubmit />
+        </PromptInputBody>
+      </PromptInput>
+    );
+
+    const textarea = screen.getByPlaceholderText(
+      "What would you like to know?"
+    );
+    await user.type(textarea, "Test");
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Backspace}");
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    expect(onSubmitModePreferenceDetected).toHaveBeenCalledWith({
+      currentSubmitMode: "mod-enter",
+      reason: "newline-removed-before-modifier-submit",
+      suggestedSubmitMode: "enter",
+    });
   });
 
   it("uses custom placeholder", () => {
