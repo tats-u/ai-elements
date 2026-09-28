@@ -640,7 +640,7 @@ describe("promptInputBody", () => {
 });
 
 describe("promptInputTextarea", () => {
-  describe("inferPromptInputSubmitMode", () => {
+  describe("submit mode inference", () => {
     it("returns mod-enter for Japanese locales", () => {
       expect(inferPromptInputSubmitMode("ja-JP")).toBe("mod-enter");
     });

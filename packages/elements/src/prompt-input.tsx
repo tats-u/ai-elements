@@ -80,7 +80,11 @@ import {
 
 export type PromptInputSubmitMode = "enter" | "mod-enter";
 
-export type PromptInputLanguageSource = readonly string[] | string | null | undefined;
+export type PromptInputLanguageSource =
+  | readonly string[]
+  | string
+  | null
+  | undefined;
 
 export type PromptInputSubmitModePreferenceReason =
   | "submitted-with-modifier"
@@ -109,10 +113,10 @@ const PROMPT_INPUT_SHORTCUT_PREFERENCE_WINDOW_MS = 3000;
 const PROMPT_INPUT_MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
 
 const parsePromptInputLanguageEntry = (language: string, index: number) => {
-  const [tag, ...parameters] = language
+  const [rawTag, ...parameters] = language
     .split(";")
-    .map((part) => part.trim())
-    .filter(Boolean);
+    .map((part) => part.trim());
+  const tag = rawTag ?? "";
 
   if (!tag) {
     return null;
@@ -151,17 +155,26 @@ const getNavigatorPromptInputLanguages = (): readonly string[] | undefined => {
 const normalizePromptInputLanguageEntries = (
   languages: PromptInputLanguageSource
 ) => {
-  const rawEntries =
-    typeof languages === "string"
-      ? languages.split(",")
-      : languages
-        ? [...languages]
-        : [];
+  let rawEntries: string[] = [];
+
+  if (typeof languages === "string") {
+    rawEntries = languages.split(",");
+  } else if (languages) {
+    rawEntries = [...languages];
+  }
 
   return rawEntries
     .map((language, index) => parsePromptInputLanguageEntry(language, index))
-    .filter((entry) => entry !== null)
-    .sort((left, right) => right.quality - left.quality || left.index - right.index);
+    .filter(
+      (
+        entry
+      ): entry is NonNullable<
+        ReturnType<typeof parsePromptInputLanguageEntry>
+      > => entry !== null
+    )
+    .toSorted(
+      (left, right) => right.quality - left.quality || left.index - right.index
+    );
 };
 
 const hasCollapsedSelectionAtEnd = (element: HTMLTextAreaElement) =>
@@ -177,7 +190,9 @@ const isModifierSubmitKey = (event: { ctrlKey: boolean; metaKey: boolean }) =>
 const isShortcutPreferenceStateFresh = (
   state: PromptInputShortcutPreferenceState,
   now: number
-) => state.kind !== "idle" && now - state.at <= PROMPT_INPUT_SHORTCUT_PREFERENCE_WINDOW_MS;
+) =>
+  state.kind !== "idle" &&
+  now - state.at <= PROMPT_INPUT_SHORTCUT_PREFERENCE_WINDOW_MS;
 
 export const inferPromptInputSubmitMode = (
   languages: PromptInputLanguageSource,
@@ -1079,7 +1094,9 @@ export const PromptInputBody = ({
   <div className={cn("contents", className)} {...props} />
 );
 
-export type PromptInputTextareaProps = ComponentProps<typeof InputGroupTextarea> & {
+export type PromptInputTextareaProps = ComponentProps<
+  typeof InputGroupTextarea
+> & {
   onSubmitModePreferenceDetected?: (
     event: PromptInputSubmitModePreferenceEvent
   ) => void;
@@ -1098,11 +1115,10 @@ export const PromptInputTextarea = ({
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
-  const shortcutPreferenceState =
-    useRef<PromptInputShortcutPreferenceState>({
-      at: null,
-      kind: "idle",
-    });
+  const shortcutPreferenceState = useRef<PromptInputShortcutPreferenceState>({
+    at: null,
+    kind: "idle",
+  });
 
   const clearShortcutPreferenceState = useCallback(() => {
     shortcutPreferenceState.current = {
@@ -1161,7 +1177,10 @@ export const PromptInputTextarea = ({
 
           if (
             shortcutPreferenceState.current.kind === "trailing-newline" &&
-            isShortcutPreferenceStateFresh(shortcutPreferenceState.current, now) &&
+            isShortcutPreferenceStateFresh(
+              shortcutPreferenceState.current,
+              now
+            ) &&
             hasCollapsedSelectionAtEnd(currentTarget) &&
             currentTarget.value.endsWith("\n")
           ) {
@@ -1171,8 +1190,12 @@ export const PromptInputTextarea = ({
               suggestedSubmitMode: "enter",
             };
           } else if (
-            shortcutPreferenceState.current.kind === "trimmed-trailing-newline" &&
-            isShortcutPreferenceStateFresh(shortcutPreferenceState.current, now) &&
+            shortcutPreferenceState.current.kind ===
+              "trimmed-trailing-newline" &&
+            isShortcutPreferenceStateFresh(
+              shortcutPreferenceState.current,
+              now
+            ) &&
             hasCollapsedSelectionAtEnd(currentTarget)
           ) {
             detectedPreference = {
@@ -1218,7 +1241,10 @@ export const PromptInputTextarea = ({
       if (e.key === "Backspace" && submitMode === "mod-enter") {
         if (
           shortcutPreferenceState.current.kind === "trailing-newline" &&
-          isShortcutPreferenceStateFresh(shortcutPreferenceState.current, now) &&
+          isShortcutPreferenceStateFresh(
+            shortcutPreferenceState.current,
+            now
+          ) &&
           hasCollapsedSelectionAtEnd(currentTarget) &&
           currentTarget.value.endsWith("\n")
         ) {
