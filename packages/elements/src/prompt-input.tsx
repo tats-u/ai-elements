@@ -1,5 +1,19 @@
 "use client";
 
+import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
+import type {
+  ChangeEventHandler,
+  ClipboardEventHandler,
+  ComponentProps,
+  FormEvent,
+  FormEventHandler,
+  HTMLAttributes,
+  KeyboardEventHandler,
+  PropsWithChildren,
+  ReactNode,
+  RefObject,
+} from "react";
+
 import {
   Command,
   CommandEmpty,
@@ -40,7 +54,6 @@ import {
   TooltipTrigger,
 } from "@repo/shadcn-ui/components/ui/tooltip";
 import { cn } from "@repo/shadcn-ui/lib/utils";
-import type { ChatStatus, FileUIPart, SourceDocumentUIPart } from "ai";
 import {
   CornerDownLeftIcon,
   ImageIcon,
@@ -50,19 +63,6 @@ import {
   XIcon,
 } from "lucide-react";
 import { nanoid } from "nanoid";
-import type {
-  ChangeEvent,
-  ChangeEventHandler,
-  ClipboardEventHandler,
-  ComponentProps,
-  FormEvent,
-  FormEventHandler,
-  HTMLAttributes,
-  KeyboardEventHandler,
-  PropsWithChildren,
-  ReactNode,
-  RefObject,
-} from "react";
 import {
   Children,
   createContext,
@@ -1115,12 +1115,14 @@ export const PromptInputTextarea = ({
   const controller = useOptionalPromptInputController();
   const attachments = usePromptInputAttachments();
   const [isComposing, setIsComposing] = useState(false);
+  const pendingTrailingNewlineAt = useRef<number | null>(null);
   const shortcutPreferenceState = useRef<PromptInputShortcutPreferenceState>({
     at: null,
     kind: "idle",
   });
 
-  const clearShortcutPreferenceState = useCallback(() => {
+  const clearShortcutPreferenceTracking = useCallback(() => {
+    pendingTrailingNewlineAt.current = null;
     shortcutPreferenceState.current = {
       at: null,
       kind: "idle",
@@ -1128,8 +1130,8 @@ export const PromptInputTextarea = ({
   }, []);
 
   useEffect(() => {
-    clearShortcutPreferenceState();
-  }, [clearShortcutPreferenceState, submitMode]);
+    clearShortcutPreferenceTracking();
+  }, [clearShortcutPreferenceTracking, submitMode]);
 
   const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = useCallback(
     (e) => {
@@ -1151,7 +1153,7 @@ export const PromptInputTextarea = ({
         e.key !== "Enter" &&
         !PROMPT_INPUT_MODIFIER_KEYS.has(e.key)
       ) {
-        clearShortcutPreferenceState();
+        clearShortcutPreferenceTracking();
       }
 
       if (e.key === "Enter") {
@@ -1165,12 +1167,9 @@ export const PromptInputTextarea = ({
         if (submitMode === "mod-enter") {
           if (!usesModifierToSubmit) {
             if (hasCollapsedSelectionAtEnd(currentTarget)) {
-              shortcutPreferenceState.current = {
-                at: now,
-                kind: "trailing-newline",
-              };
+              pendingTrailingNewlineAt.current = now;
             } else {
-              clearShortcutPreferenceState();
+              clearShortcutPreferenceTracking();
             }
             return;
           }
@@ -1218,7 +1217,7 @@ export const PromptInputTextarea = ({
           }
         }
 
-        clearShortcutPreferenceState();
+        clearShortcutPreferenceTracking();
         e.preventDefault();
 
         // Check if the submit button is disabled before submitting
@@ -1253,7 +1252,7 @@ export const PromptInputTextarea = ({
             kind: "trimmed-trailing-newline",
           };
         } else if (shortcutPreferenceState.current.kind !== "idle") {
-          clearShortcutPreferenceState();
+          clearShortcutPreferenceTracking();
         }
       }
 
@@ -1274,7 +1273,7 @@ export const PromptInputTextarea = ({
       isComposing,
       submitMode,
       attachments,
-      clearShortcutPreferenceState,
+      clearShortcutPreferenceTracking,
       onSubmitModePreferenceDetected,
     ]
   );
@@ -1309,16 +1308,47 @@ export const PromptInputTextarea = ({
   const handleCompositionEnd = useCallback(() => setIsComposing(false), []);
   const handleCompositionStart = useCallback(() => setIsComposing(true), []);
 
+  const handleChange: ChangeEventHandler<HTMLTextAreaElement> = useCallback(
+    (event) => {
+      if (
+        submitMode === "mod-enter" &&
+        pendingTrailingNewlineAt.current !== null
+      ) {
+        const trackedAt = pendingTrailingNewlineAt.current;
+        pendingTrailingNewlineAt.current = null;
+
+        if (
+          event.currentTarget.value.endsWith("\n") &&
+          hasCollapsedSelectionAtEnd(event.currentTarget)
+        ) {
+          shortcutPreferenceState.current = {
+            at: trackedAt,
+            kind: "trailing-newline",
+          };
+        } else {
+          shortcutPreferenceState.current = {
+            at: null,
+            kind: "idle",
+          };
+        }
+      }
+
+      if (controller) {
+        controller.textInput.setInput(event.currentTarget.value);
+      }
+
+      onChange?.(event);
+    },
+    [controller, onChange, submitMode]
+  );
+
   const controlledProps = controller
     ? {
-        onChange: (e: ChangeEvent<HTMLTextAreaElement>) => {
-          controller.textInput.setInput(e.currentTarget.value);
-          onChange?.(e);
-        },
+        onChange: handleChange,
         value: controller.textInput.value,
       }
     : {
-        onChange,
+        onChange: handleChange,
       };
 
   return (
