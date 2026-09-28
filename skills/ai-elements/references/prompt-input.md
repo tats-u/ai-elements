@@ -245,7 +245,7 @@ export async function POST(req: Request) {
 - Image preview for image attachments
 - Configurable file constraints (max files, max size, accepted types)
 - Automatic submit button icons based on status
-- Support for keyboard shortcuts (Enter to submit, Shift+Enter for new line)
+- Configurable keyboard shortcuts (Enter or Ctrl/Cmd+Enter to submit)
 - Customizable min/max height for the textarea
 - Flexible toolbar with support for custom actions and tools
 - Built-in model selection dropdown
@@ -270,6 +270,41 @@ Buttons can display tooltips with optional keyboard shortcut hints. Hover over t
 
 See `scripts/prompt-input-tooltip.tsx` for this example.
 
+## Submit modes
+
+`<PromptInputTextarea />` supports two submit modes:
+
+- `"enter"`: `Enter` submits and `Shift+Enter` inserts a new line
+- `"mod-enter"`: `Ctrl+Enter` / `Cmd+Enter` submits and `Enter` inserts a new line
+
+Use `usePromptInputSubmitMode()` to fall back to the user's language when you do not already have a saved preference, and use `inferPromptInputSubmitMode()` when you need the same logic outside React (for example on the server with an `Accept-Language` header).
+
+```tsx
+const storedSubmitMode = localStorage.getItem("submitMode");
+const submitMode = usePromptInputSubmitMode({
+  storedSubmitMode:
+    storedSubmitMode === "enter" || storedSubmitMode === "mod-enter"
+      ? storedSubmitMode
+      : null,
+});
+
+<PromptInput onSubmit={handleSubmit}>
+  <PromptInputBody>
+    <PromptInputTextarea
+      onSubmitModePreferenceDetected={({ suggestedSubmitMode }) => {
+        toast(`Switch submit shortcut to ${suggestedSubmitMode}?`);
+      }}
+      submitMode={submitMode}
+    />
+  </PromptInputBody>
+  <PromptInputFooter>
+    <PromptInputSubmit />
+  </PromptInputFooter>
+</PromptInput>;
+```
+
+For SSR or non-React code, call `inferPromptInputSubmitMode(headers().get("accept-language"))`.
+
 ## Props
 
 ### `<PromptInput />`
@@ -290,6 +325,8 @@ See `scripts/prompt-input-tooltip.tsx` for this example.
 
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
+| `submitMode` | `PromptInputSubmitMode` | - | Choose whether submission uses enter or mod-enter (Ctrl+Enter / Cmd+Enter). |
+| `onSubmitModePreferenceDetected` | `(event: PromptInputSubmitModePreferenceEvent) => void` | - | Called when the user appears to prefer the opposite submit shortcut so apps can suggest changing the setting. |
 | `...props` | `React.ComponentProps<typeof Textarea>` | - | Any other props are spread to the underlying Textarea component. |
 
 ### `<PromptInputFooter />`
@@ -336,6 +373,14 @@ See `scripts/prompt-input-tooltip.tsx` for this example.
 |------|------|---------|-------------|
 | `status` | `ChatStatus` | - | Current chat status to determine button icon (submitted, streaming, error). |
 | `...props` | `React.ComponentProps<typeof Button>` | - | Any other props are spread to the underlying shadcn/ui Button component. |
+
+### `inferPromptInputSubmitMode()`
+
+Infer the default submit mode from a locale string, `Accept-Language` header, or language array.
+
+### `usePromptInputSubmitMode()`
+
+Resolve the submit mode from a saved preference first, then fall back to language detection from `navigator.languages` / `navigator.language`.
 
 ### `<PromptInputSelect />`
 
